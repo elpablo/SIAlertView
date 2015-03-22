@@ -76,8 +76,11 @@ typedef void(^SIAlertViewHandler)(SIAlertView *alertView);
 
 - (id)initWithTitle:(NSString *)title andMessage:(NSString *)message;
 - (void)addButtonWithTitle:(NSString *)title type:(SIAlertViewButtonType)type handler:(SIAlertViewHandler)handler;
+- (void)visualizeTextFieldWithPlaceholderText:(NSString *)text secureText:(BOOL)secure;
 
 - (void)show;
 - (void)dismissAnimated:(BOOL)animated;
+
+- (NSString *)textFromTextField;
 
 @end

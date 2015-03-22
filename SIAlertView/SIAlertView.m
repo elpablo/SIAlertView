@@ -25,6 +25,7 @@ NSString *const SIAlertViewDidDismissNotification = @"SIAlertViewDidDismissNotif
 #define CONTENT_PADDING_TOP 12
 #define CONTENT_PADDING_BOTTOM 10
 #define BUTTON_HEIGHT 44
+#define TEXT_FIELD_HEIGHT 30
 #define CONTAINER_WIDTH 300
 
 const UIWindowLevel UIWindowLevelSIAlert = 1996.0;  // don't overlap system's alert
@@ -37,7 +38,7 @@ static BOOL __si_alert_animating;
 static SIAlertBackgroundWindow *__si_alert_background_window;
 static SIAlertView *__si_alert_current_view;
 
-@interface SIAlertView ()
+@interface SIAlertView () <UITextFieldDelegate>
 
 @property (nonatomic, strong) NSMutableArray *items;
 @property (nonatomic, weak) UIWindow *oldKeyWindow;
@@ -46,6 +47,9 @@ static SIAlertView *__si_alert_current_view;
 @property (nonatomic, assign) UIViewTintAdjustmentMode oldTintAdjustmentMode;
 #endif
 @property (nonatomic, assign, getter = isVisible) BOOL visible;
+
+@property (nonatomic, strong) UIScrollView *scrollView;
+@property (nonatomic, strong) UITextField *textField;
 
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UILabel *messageLabel;
@@ -266,6 +270,58 @@ static SIAlertView *__si_alert_current_view;
 	return self;
 }
 
+- (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event
+{
+    if (self.textField) {
+        [self.textField resignFirstResponder];
+    }
+}
+
+- (void)registerForKeyboardNotifications
+{
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(keyboardWasShown:)
+                                                 name:UIKeyboardDidShowNotification
+                                               object:nil];
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(keyboardWillBeHidden:)
+                                                 name:UIKeyboardWillHideNotification
+                                               object:nil];
+}
+
+- (void)deregisterFromKeyboardNotifications
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:UIKeyboardDidHideNotification
+                                                  object:nil];
+    
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:UIKeyboardWillHideNotification
+                                                  object:nil];
+}
+
+- (void)keyboardWasShown:(NSNotification *)notification
+{
+    NSDictionary* info = [notification userInfo];
+    
+    CGSize keyboardSize = [[info objectForKey:UIKeyboardFrameBeginUserInfoKey] CGRectValue].size;
+    
+    CGPoint textFieldOrigin = self.textField.frame.origin;
+    CGRect visibleRect = self.containerView.frame;
+    visibleRect.size.height -= keyboardSize.height;
+    
+    if (!CGRectContainsPoint(visibleRect, textFieldOrigin)) {
+        CGPoint scrollPoint = CGPointMake(0.0, keyboardSize.height - textFieldOrigin.y);
+        [self.scrollView setContentOffset:scrollPoint animated:YES];
+    }
+}
+
+- (void)keyboardWillBeHidden:(NSNotification *)notification
+{
+    [self.scrollView setContentOffset:CGPointZero animated:YES];
+}
+
 #pragma mark - Class methods
 
 + (NSMutableArray *)sharedQueue
@@ -349,6 +405,28 @@ static SIAlertView *__si_alert_current_view;
 }
 
 #pragma mark - Public
+
+- (void)visualizeTextFieldWithPlaceholderText:(NSString *)text secureText:(BOOL)secure
+{
+    if (!self.textField) {
+        self.textField = [[UITextField alloc] initWithFrame:self.bounds];
+        [self.textField setDelegate:(id<UITextFieldDelegate>)self];
+        self.textField.textAlignment = NSTextAlignmentLeft;
+        self.textField.backgroundColor = [UIColor clearColor];
+        self.textField.textColor = [UIColor blackColor];
+        [self registerForKeyboardNotifications];
+    }
+    
+    self.textField.secureTextEntry = secure;
+    self.textField.placeholder = text;
+    
+    [self invalidateLayout];
+}
+
+- (NSString *)textFromTextField
+{
+    return self.textField ? self.textField.text : @"";
+}
 
 - (void)addButtonWithTitle:(NSString *)title type:(SIAlertViewButtonType)type handler:(SIAlertViewHandler)handler
 {
@@ -746,6 +824,14 @@ static SIAlertView *__si_alert_current_view;
         self.messageLabel.frame = CGRectMake(CONTENT_PADDING_LEFT, y, self.containerView.bounds.size.width - CONTENT_PADDING_LEFT * 2, height);
         y += height;
     }
+    if (self.textField) {
+        if (y > CONTENT_PADDING_TOP) {
+            y += GAP;
+        }
+        CGFloat height = TEXT_FIELD_HEIGHT;
+        self.textField.frame = CGRectMake(CONTENT_PADDING_LEFT, y, self.containerView.bounds.size.width - CONTENT_PADDING_LEFT * 2, height);
+        y += height;
+    }
     if (self.items.count > 0) {
         if (y > CONTENT_PADDING_TOP) {
             y += GAP;
@@ -784,6 +870,12 @@ static SIAlertView *__si_alert_current_view;
             height += GAP;
         }
         height += [self heightForMessageLabel];
+    }
+    if (self.textField) {
+        if (height > CONTENT_PADDING_TOP) {
+            height += GAP;
+        }
+        height += TEXT_FIELD_HEIGHT;
     }
     if (self.items.count > 0) {
         if (height > CONTENT_PADDING_TOP) {
@@ -877,16 +969,23 @@ static SIAlertView *__si_alert_current_view;
     [self setupContainerView];
     [self updateTitleLabel];
     [self updateMessageLabel];
+    [self setupTextField];
     [self setupButtons];
     [self invalidateLayout];
 }
 
 - (void)teardown
 {
+    [self.scrollView removeFromSuperview];
+    self.scrollView = nil;
     [self.containerView removeFromSuperview];
     self.containerView = nil;
     self.titleLabel = nil;
     self.messageLabel = nil;
+    if (self.textField) {
+        [self deregisterFromKeyboardNotifications];
+    }
+    self.textField = nil;
     [self.buttons removeAllObjects];
     [self.alertWindow removeFromSuperview];
     self.alertWindow = nil;
@@ -901,7 +1000,10 @@ static SIAlertView *__si_alert_current_view;
     self.containerView.layer.shadowOffset = CGSizeZero;
     self.containerView.layer.shadowRadius = self.shadowRadius;
     self.containerView.layer.shadowOpacity = 0.5;
-    [self addSubview:self.containerView];
+    self.scrollView = [[UIScrollView alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    [self.scrollView addSubview:self.containerView];
+    [self.scrollView setUserInteractionEnabled:YES];
+    [self addSubview:self.scrollView];
 }
 
 - (void)updateTitleLabel
@@ -951,6 +1053,14 @@ static SIAlertView *__si_alert_current_view;
     } else {
         [self.messageLabel removeFromSuperview];
         self.messageLabel = nil;
+    }
+    [self invalidateLayout];
+}
+
+- (void)setupTextField
+{
+    if (self.textField) {
+        [self.containerView addSubview:self.textField];
     }
     [self invalidateLayout];
 }
@@ -1018,6 +1128,16 @@ static SIAlertView *__si_alert_current_view;
 		item.action(self);
 	}
 	[self dismissAnimated:YES];
+}
+
+#pragma mark - UITaxtField Delegate
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField
+{
+    if (textField == self.textField) {
+        [self.textField resignFirstResponder];
+    }
+    return YES;
 }
 
 #pragma mark - CAAnimation delegate
